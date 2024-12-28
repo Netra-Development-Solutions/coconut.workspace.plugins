@@ -1,0 +1,63 @@
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Select the plugin to deploy (e.g., plugin1, plugin2, plugin3)"
+        required: true
+        default: "app-host"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the code
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # Validate input against predefined plugin names
+    - name: Validate Plugin Input
+      id: validate-input
+      run: |
+        VALID_PLUGINS=("header-navigation" "user-management")
+        if [[ ! " ${VALID_PLUGINS[@]} " =~ " ${{ github.event.inputs.plugin }} " ]]; then
+          echo "Invalid plugin: ${{ github.event.inputs.plugin }}. Valid options are: ${VALID_PLUGINS[@]}"
+          exit 1
+        fi
+        echo "PLUGIN_DIR=${{ github.event.inputs.plugin }}" >> $GITHUB_ENV
+    # Navigate to the plugin directory and install dependencies
+    - name: Install Dependencies
+      run: |
+        cd $PLUGIN_DIR
+        npm install
+    # Build the selected plugin
+    - name: Build React Plugin
+      run: |
+        cd $PLUGIN_DIR
+        npm run build
+    # Extract version from package.json
+    - name: Get Version from package.json
+      id: get-version
+      run: |
+        VERSION=$(jq -r '.version' $PLUGIN_DIR/package.json)
+        echo "PLUGIN_VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Using version: $VERSION"
+    # Define the S3 directory path using version and plugin name
+    - name: Define S3 Directory Path
+      id: define-s3-path
+      run: |
+        S3_DIR_PATH="plugins/${{ github.event.inputs.plugin }}/v${{ env.PLUGIN_VERSION }}"
+        echo "S3_DIR_PATH=$S3_DIR_PATH" >> $GITHUB_ENV
+        echo "S3 path set to: $S3_DIR_PATH"
+    # Deploy to S3 (no delete option to avoid removal of old files)
+    - name: Deploy to S3
+      uses: jakejarvis/s3-sync-action@v0.5.1
+      with:
+        args: --acl public-read
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_S3_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_S3_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+        AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET_NAME }}
+        SOURCE_DIR: "${{ env.PLUGIN_DIR }}/dist"
+        DEST_DIR: "${{ env.S3_DIR_PATH }}"
